@@ -1,0 +1,53 @@
+name: Event Desk daily database health check
+
+on:
+  schedule:
+    # 13:37 UTC daily (8:37 AM EST / 9:37 AM EDT).
+    - cron: '37 13 * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/event-desk-daily-health.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: event-desk-daily-health
+  cancel-in-progress: false
+
+jobs:
+  database-read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read and validate the live public catalog
+        shell: python
+        run: |
+          import json
+          import time
+          import urllib.request
+
+          # This read-only public endpoint queries crm_workspace in Supabase.
+          # No client records, credentials or catalog contents are written to logs.
+          url = "https://north-georgia-booking-forms.seanc88.chatgpt.site/api/public/catalog"
+          for attempt in range(3):
+              try:
+                  request = urllib.request.Request(url, headers={
+                      "User-Agent": "NGWE-Event-Desk-Daily-Health/1.0",
+                      "Cache-Control": "no-cache",
+                      "Accept": "application/json",
+                  })
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      if response.status != 200:
+                          raise RuntimeError("Unexpected HTTP status")
+                      payload = json.load(response)
+                  if not isinstance(payload, dict) or not isinstance(payload.get("packages"), list):
+                      raise RuntimeError("Unexpected catalog response")
+                  print("PASS: Event Desk public catalog and database read succeeded.")
+                  break
+              except Exception as error:
+                  print("Attempt", attempt + 1, "failed:", type(error).__name__)
+                  if attempt == 2:
+                      raise SystemExit("FAIL: Event Desk database-backed health check failed.")
+                  time.sleep(5 * (attempt + 1))
